@@ -1,14 +1,23 @@
+from typing import Union, Optional
 from .user_repo import load_user
-from .utils.stringy import sanitize_string
+from .utils.string import sanitize_string
 
-def get_user_profile(user_id: int | None):
+def get_user_profile(user_id: Optional[int]):
     """
-    Bug #1: crashes when user_id is None (should return {}).
-    Bug #2 (cross-file): depends on sanitize_string in another file.
+    Get user profile with proper error handling.
     """
-    # BUG: no guard for None
+    # Handle None user_id
+    if user_id is None:
+        return {}
+    
     user = load_user(user_id)  # may return {} or None-ish fields
-    # BUG: no defaults; will KeyError or TypeError on missing keys/None
-    name = sanitize_string(user["name"])
-    email = sanitize_string(user["email"])
+    
+    # Handle missing user or missing fields
+    if not user:
+        return {}
+    
+    # Safely get name and email with defaults
+    name = sanitize_string(user.get("name", ""))
+    email = sanitize_string(user.get("email", ""))
+    
     return {"id": user_id, "name": name, "email": email}
