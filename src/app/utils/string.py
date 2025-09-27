@@ -1,6 +1,7 @@
 def sanitize_string(s):
     """
-    Bug #4: crashes on None; should return "" (empty) for None.
+    Sanitize string by trimming whitespace and handling None values.
     """
-    # BUG: assumes s is str
-    return s.strip()
+    if s is None:
+        return ""
+    return str(s).strip()

@@ -53,15 +53,22 @@ class TicketWatcherAgent:
 
         # Prompts
         self.sysprompt = system_prompt or (
-            "You are TicketFix, an automated code-fixing agent.\n\n"
-            "Return EXACTLY ONE JSON object and NOTHING ELSE (no prose, no code fences). It must match ONE of:\n\n"
+            "You are TicketFix, an intelligent automated code-fixing agent.\n\n"
+            "## THINKING PROCESS\n"
+            "Before responding, analyze the issue systematically:\n"
+            "1. **ANALYZE** the issue for error messages, file paths, function names, context clues\n"
+            "2. **DETECT** potential file locations from function names, domain clues, partial paths\n"
+            "3. **REASON** about what information you need to solve the problem\n"
+            "4. **PLAN** your approach strategically\n\n"
+            "Return EXACTLY ONE JSON object and NOTHING ELSE (no prose, no code fences):\n\n"
             "1) Ask for more context:\n"
             "{\n"
             '  "action": "request_context",\n'
             '  "needs": [\n'
             '    { "path": "string", "symbol": "string|null", "line": "integer|null", "around_lines": "integer" }\n'
             "  ],\n"
-            '  "reason": "string"\n'
+            '  "reason": "string",\n'
+            '  "thinking": "string (your reasoning process)"\n'
             "}\n\n"
             "2) Propose a minimal patch:\n"
             "{\n"
@@ -70,47 +77,78 @@ class TicketWatcherAgent:
             '  "diff": "string (standard unified diff: --- a/<path> / +++ b/<path> …)",\n'
             '  "files_touched": ["string", ...],\n'
             '  "estimated_changed_lines": "integer",\n'
-            '  "notes": "string"\n'
+            '  "notes": "string",\n'
+            '  "thinking": "string (your reasoning process)"\n'
             "}\n\n"
-            "Rules:\n"
-            "- Use request_context when current snippets are insufficient. Each need selects a precise slice: either a symbol OR a line (one can be null). around_lines is typically 60.\n"
-            "- Patches MUST respect constraints: allowed_paths only; ≤ max_files; ≤ max_total_lines; no new files unless clearly allowed.\n"
-            "- Prefer the smallest safe change. Do not refactor broadly.\n"
-            "- Work only from provided snippets and requested slices. Do not assume unseen code.\n"
-            '- Output JSON ONLY. If constraints make a safe fix impossible, request_context and explain briefly in "reason".\n'
+            "## ENHANCED RULES\n"
+            "- **Smart Context Detection**: Even if no explicit file paths are given, infer likely locations\n"
+            "- **Progressive Information Gathering**: Start broad, then narrow down\n"
+            "- **Thinking Transparency**: Always explain your reasoning in the 'thinking' field\n"
+            "- **Strategic Information**: Request the most valuable information first\n"
+            "- **Constraint Awareness**: Respect max_files, max_lines, allowed_paths\n"
+            "- **Minimal Changes**: Prefer the smallest safe fix\n\n"
+            "## CONTEXT DETECTION STRATEGIES\n"
+            "- Look for function names: 'get_user_profile' → likely in auth/user files\n"
+            "- Look for error patterns: 'KeyError: name' → likely dict access issues\n"
+            "- Look for domain clues: 'authentication' → likely auth.py files\n"
+            "- Look for partial paths: 'auth.py' → try src/app/auth.py, app/auth.py\n"
+            "- Look for import errors: 'ModuleNotFoundError' → check import paths\n\n"
+            "Remember: You're not just looking for explicit file paths - you're detecting context and inferring likely locations!"
         )
 
         self.user_template = user_prompt_template or """
-TICKET
-Title: $ticket_title
-Body:
+# TICKET ANALYSIS REQUEST
+
+## ISSUE DETAILS
+**Title:** $ticket_title
+**Description:**
 $ticket_body_trimmed
 
-CONSTRAINTS
-allowed_paths: $allowed_paths_csv
-max_files: $max_files
-max_total_lines: $max_total_lines
-default_around_lines: $around_lines
-route: $route_hint
+## CONSTRAINTS
+- **Allowed Paths:** $allowed_paths_csv
+- **Max Files:** $max_files
+- **Max Lines:** $max_total_lines
+- **Context Window:** $around_lines lines around target
 
-CURRENT SNIPPETS
+## CURRENT CONTEXT
 $snippets_block
-# Each snippet uses this format, repeated 0..N times:
-# --- path: <repo-relative-path>
-# --- start_line: <int>
-# --- end_line: <int>
-# --- code:
-# <code lines…>
 
-YOUR TASK
-Return ONE of:
-(A) { "action": "request_context", "needs": [ { "path": "<string>", "symbol": "<string|null>", "line": "<int|null>", "around_lines": <int> } ... ], "reason": "..." }
-    - Use this if more slices are needed. Keep requests inside allowed_paths.
-    - Use symbol for functions/classes when known; otherwise provide a line.
-(B) { "action": "propose_patch", "format": "unified_diff", "diff": "...", "files_touched": ["..."], "estimated_changed_lines": <int>, "notes": "..." }
-    - Unified diff must apply cleanly to current code.
-    - Respect max_files and max_total_lines; if exceeded, choose (A) instead.
-OUTPUT MUST BE A SINGLE JSON OBJECT ONLY.
+## YOUR TASK
+Analyze this issue and either:
+
+**A) REQUEST MORE CONTEXT** if you need additional information:
+```json
+{
+  "action": "request_context",
+  "needs": [
+    { "path": "src/app/auth.py", "symbol": "get_user_profile", "line": null, "around_lines": 60 }
+  ],
+  "reason": "I need to see the get_user_profile function to understand the KeyError",
+  "thinking": "The error mentions KeyError: 'name' in get_user_profile. I should examine this function and understand how user data is structured."
+}
+```
+
+**B) PROPOSE A FIX** if you have enough information:
+```json
+{
+  "action": "propose_patch",
+  "format": "unified_diff",
+  "diff": "--- a/src/app/auth.py\\n+++ b/src/app/auth.py\\n@@ -10,7 +10,7 @@ def get_user_profile(user_id):\\n-    name = user[\\\"name\\\"]\\n+    name = user.get(\\\"name\\\", \\\"\\\")\\n",
+  "files_touched": ["src/app/auth.py"],
+  "estimated_changed_lines": 1,
+  "notes": "Fixed KeyError by using .get() with default value",
+  "thinking": "The issue is a KeyError when accessing user['name']. Using .get() with a default empty string will prevent the crash."
+}
+```
+
+## ENHANCED ANALYSIS TIPS
+1. **Look for patterns** in the issue description
+2. **Infer file locations** from context clues
+3. **Think strategically** about what information you need
+4. **Explain your reasoning** in the thinking field
+5. **Be proactive** in context detection
+
+Remember: You're an intelligent agent - use your reasoning to detect context even when it's not explicitly provided!
 """  
         
 
@@ -265,6 +303,72 @@ OUTPUT MUST BE A SINGLE JSON OBJECT ONLY.
         return cleaned
 
     def _path_allowed(self, path: str) -> bool:
+        if not path:
+            return False
+        return any(path.startswith(pfx) for pfx in self.allowed_paths)
+
+    def detect_context_from_issue(self, title: str, body: str) -> List[Tuple[str, Optional[int]]]:
+        """
+        Enhanced context detection from issue title and body.
+        Returns list of (path, line) tuples.
+        """
+        detected_paths = []
+        
+        # Enhanced patterns for context detection
+        patterns = [
+            # Explicit file paths
+            r'File\s+"([^"]+)"\s*,\s*line\s+(\d+)',
+            r'File\s+([^\s,]+)\s*,\s*line\s+(\d+)',
+            # Partial file names
+            r'\b(\w+\.py)\b',
+            r'\b(\w+\.js)\b',
+            r'\b(\w+\.ts)\b',
+            # Function/class names that might indicate files
+            r'\b(get_user|auth|login|user|profile)\b',
+            # Import statements
+            r'from\s+([^\s]+)\s+import',
+            r'import\s+([^\s]+)',
+        ]
+        
+        text = f"{title} {body}".lower()
+        
+        for pattern in patterns:
+            matches = re.finditer(pattern, text, re.IGNORECASE)
+            for match in matches:
+                if len(match.groups()) >= 2:
+                    # Has line number
+                    path = match.group(1)
+                    line = int(match.group(2))
+                else:
+                    # No line number
+                    path = match.group(1)
+                    line = None
+                
+                # Convert to full paths
+                full_paths = self._expand_partial_path(path)
+                for full_path in full_paths:
+                    if self._path_allowed(full_path):
+                        detected_paths.append((full_path, line))
+        
+        return detected_paths[:5]  # Limit to 5 paths
+
+    def _expand_partial_path(self, partial_path: str) -> List[str]:
+        """Expand partial file names to full paths"""
+        if "/" in partial_path:
+            return [partial_path]  # Already a full path
+        
+        # Common expansions
+        expansions = []
+        for allowed_path in self.allowed_paths:
+            if allowed_path.endswith("/"):
+                expansions.append(f"{allowed_path}{partial_path}")
+            else:
+                expansions.append(f"{allowed_path}/{partial_path}")
+        
+        return expansions
+
+    def _path_allowed(self, path: str) -> bool:
+        """Check if path is in allowed paths"""
         if not path:
             return False
         return any(path.startswith(pfx) for pfx in self.allowed_paths)
