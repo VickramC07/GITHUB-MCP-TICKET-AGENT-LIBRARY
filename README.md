@@ -58,8 +58,8 @@ graph TD
 
 ## 🚀 Quick Start
 
-### 1. Fork This Repository
-Click the "Fork" button to create your own copy of this repository.
+### 1. Install the library
+however u install the library
 
 ### 2. Add GitHub Secrets
 In your fork's repository settings, go to **Settings > Secrets and variables > Actions** and add these secrets:
