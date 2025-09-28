@@ -69,6 +69,7 @@ curl -sSL https://raw.githubusercontent.com/VickramC07/GITHUB-MCP-TICKET-AGENT-L
 In your fork's repository settings, go to **Settings > Secrets and variables > Actions** and add these secrets:
 
 - **`OPENAI_API_KEY`**: Your OpenAI API key
+- **`ALLOWED_PATHS`**: The Paths you want the AI to be able to access
 
 > **Note**: The `GITHUB_TOKEN` is automatically provided by GitHub Actions, so you don't need to add it manually.
 
