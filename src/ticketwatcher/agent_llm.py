@@ -326,7 +326,7 @@ Remember: You're an intelligent agent - use your reasoning to detect context eve
             r'\b(\w+\.js)\b',
             r'\b(\w+\.ts)\b',
             # Function/class names that might indicate files
-            r'\b(get_user|auth|login|user|profile|calculator|subtract|add|multiply|divide)\b',
+            r'\b(get_user|auth|login|user|profile|main|app|index|init)\b',
             # Import statements
             r'from\s+([^\s]+)\s+import',
             r'import\s+([^\s]+)',
@@ -356,19 +356,25 @@ Remember: You're an intelligent agent - use your reasoning to detect context eve
         # If no specific files found, try to find files in allowed directories
         if not detected_paths:
             print(f"🔍 No specific files detected, searching allowed directories: {self.allowed_paths}")
+            
+            # Enhanced general file detection
+            print(f"🔍 No specific files detected, trying general file detection...")
             for allowed_dir in self.allowed_paths:
-                # Look for common file patterns in the text
-                if 'calculator' in text:
-                    potential_files = [
-                        f"{allowed_dir}calculator.py",
-                        f"{allowed_dir}calculator/calculator.py",
-                        f"{allowed_dir}calculator/main.py",
-                        f"{allowed_dir}calculator/operations.py"
-                    ]
-                    for file_path in potential_files:
-                        if self._path_allowed(file_path):
-                            detected_paths.append((file_path, None))
-                            print(f"🎯 Added potential file: {file_path}")
+                # Look for common Python file patterns
+                potential_files = [
+                    f"{allowed_dir}main.py",
+                    f"{allowed_dir}app.py",
+                    f"{allowed_dir}index.py",
+                    f"{allowed_dir}src/main.py",
+                    f"{allowed_dir}src/app.py",
+                    f"{allowed_dir}lib/main.py",
+                    f"{allowed_dir}lib/app.py"
+                ]
+                for file_path in potential_files:
+                    if self._path_allowed(file_path):
+                        detected_paths.append((file_path, None))
+                        print(f"🎯 Added general file: {file_path}")
+                        break  # Only add one file per directory
         
         return detected_paths[:5]  # Limit to 5 paths
 
@@ -401,5 +407,3 @@ Remember: You're an intelligent agent - use your reasoning to detect context eve
         for p in parts:
             norm.append(p if p.endswith("/") else (p + ("/" if "." not in p else "")))
         return norm or ["src/"]
-
-

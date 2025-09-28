@@ -2,7 +2,6 @@ from __future__ import annotations
 import os
 import re
 import json
-import os, re
 from typing import List, Tuple, Iterable, Dict, Any, Optional
 
 from .github_api import (
@@ -57,24 +56,30 @@ def _sanitize_path_token(tok: str) -> str:
 def _to_repo_relative(path: str) -> str:
     """Return a path relative to the repo root (e.g., 'src/app/auth.py')."""
     p = (path or "").strip().replace("\\", "/")
+    print(f"🔍 DEBUG: Converting path '{path}' to repo-relative")
 
     # If it includes '<repo_name>/', trim up to that
     needle = f"/{REPO_NAME}/"
     if needle in p:
         p = p.split(needle, 1)[1]
+        print(f"   Trimmed repo name: '{p}'")
 
     # If it's already a simple relative path (no leading slash, no absolute path components),
     # keep it as-is to avoid converting to absolute paths
     if not p.startswith("/") and not p.startswith(REPO_ROOT) and not os.path.isabs(p):
-        return p.lstrip("./").lstrip("/")
+        result = p.lstrip("./").lstrip("/")
+        print(f"   Simple relative path: '{result}'")
+        return result
 
     # If absolute and under the workspace, relativize
     try:
         rel = os.path.relpath(p, REPO_ROOT).replace("\\", "/")
-    except Exception:
-        rel = p
-
-    return rel.lstrip("./").lstrip("/")
+        result = rel.lstrip("./").lstrip("/")
+        print(f"   Relativized path: '{result}'")
+        return result
+    except Exception as e:
+        print(f"   Error relativizing: {e}, using original: '{p}'")
+        return p.lstrip("./").lstrip("/")
 
 def _path_allowed_with(path: str, allowed_prefixes: Iterable[str] | None) -> bool:
     """Allowlist check; if prefixes empty/None or contains '', allow all."""
@@ -350,6 +355,33 @@ def handle_issue_event(event: Dict[str, Any]) -> Optional[str]:
     body  = issue.get("body", "") or ""
     base  = os.getenv("TICKETWATCHER_BASE_BRANCH") or get_default_branch()
     
+    # DEBUG: Show environment and configuration
+    print(f"🔍 DEBUG: TicketWatcher Analysis Starting")
+    print(f"   Working Directory: {os.getcwd()}")
+    print(f"   Repository Root: {REPO_ROOT}")
+    print(f"   Repository Name: {REPO_NAME}")
+    print(f"   Base Branch: {base}")
+    print(f"   Allowed Paths: {ALLOWED_PATHS}")
+    print(f"   Max Files: {MAX_FILES}")
+    print(f"   Max Lines: {MAX_LINES}")
+    print(f"   Issue Title: {title}")
+    print(f"   Issue Body: {body[:200]}...")
+    
+    # DEBUG: Show directory structure
+    print(f"📁 Directory Structure:")
+    try:
+        for root, dirs, files in os.walk("."):
+            level = root.replace(".", "").count(os.sep)
+            indent = " " * 2 * level
+            print(f"{indent}{os.path.basename(root)}/")
+            subindent = " " * 2 * (level + 1)
+            for file in files[:5]:  # Show first 5 files
+                print(f"{subindent}{file}")
+            if len(files) > 5:
+                print(f"{subindent}... and {len(files) - 5} more files")
+    except Exception as e:
+        print(f"   Could not scan directory structure: {e}")
+    
     # Check for cross-repository references (only for actual different repos)
     cross_repo_patterns = [
         r'Target:\s*([^/\s]+/[^/\s]+):([^\s]+)',  # owner/repo:path
@@ -443,58 +475,195 @@ Would you like me to help you with any of these options? 🚀"""
             add_issue_comment(number, comment)
             return None
 
-    # 1) Build seed snippets from traceback/target hints
-    seed_specs = parse_stack_text(body, allowed_prefixes=ALLOWED_PATHS, limit=5)
-    print(f"🔍 Parsed seed specs: {seed_specs}")
+    # 1) Enhanced file detection - try multiple approaches
+    print(f"🤖 Enhanced file detection starting...")
     
-    # If no paths detected, try enhanced context detection
-    if not seed_specs:
-        print(f"🔍 No explicit file paths detected, attempting intelligent inference...")
+    # First, try to detect files from the issue content
+    detected_files = []
+    
+    # Check for explicit file references
+    explicit_files = []
+    for line in body.split('\n'):
+        if 'Target:' in line:
+            target_match = re.search(r'Target:\s*(.+)', line)
+            if target_match:
+                file_path = target_match.group(1).strip().strip('"\'')
+                explicit_files.append(file_path)
+                print(f"🎯 Found explicit target: {file_path}")
+    
+    # Check for any Python files in allowed directories
+    print(f"🔍 Searching for Python files in allowed directories...")
+    for allowed_dir in ALLOWED_PATHS:
+        # Look for common Python file patterns in each allowed directory
+        potential_files = [
+            f"{allowed_dir}main.py",
+            f"{allowed_dir}app.py", 
+            f"{allowed_dir}index.py",
+            f"{allowed_dir}src/main.py",
+            f"{allowed_dir}src/app.py",
+            f"{allowed_dir}lib/main.py",
+            f"{allowed_dir}lib/app.py"
+        ]
+        for file_path in potential_files:
+            if _path_allowed(file_path):
+                detected_files.append(file_path)
+                print(f"🎯 Added potential file: {file_path}")
+                break  # Only add one file per directory to avoid too many files
+    
+    # Add explicit files
+    detected_files.extend(explicit_files)
+    
+    # If we found files, use them directly
+    if detected_files:
+        print(f"✅ Found {len(detected_files)} files: {detected_files}")
+        requested_files = detected_files
+    else:
+        # Fallback: Ask the AI what files it needs
+        print(f"🤖 No files detected, asking AI what files it needs...")
         agent = TicketWatcherAgent(
             allowed_paths=ALLOWED_PATHS,
             max_files=MAX_FILES,
             max_total_lines=MAX_LINES,
             default_around_lines=AROUND_LINES,
         )
-        detected_paths = agent.detect_context_from_issue(title, body)
-        print(f"🧠 AI-detected paths: {detected_paths}")
-        seed_specs = detected_paths[:5]
         
-        # If still no paths found, try to find any Python files in allowed directories
-        if not seed_specs:
-            print(f"🔍 No AI-detected paths, trying to find Python files in allowed directories...")
-            for allowed_path in ALLOWED_PATHS:
-                # Try common Python file patterns
-                potential_files = [
-                    f"{allowed_path}calculator.py",
-                    f"{allowed_path}calculator/calculator.py", 
-                    f"{allowed_path}calculator/main.py",
-                    f"{allowed_path}calculator/operations.py",
-                    f"{allowed_path}main.py",
-                    f"{allowed_path}app.py"
-                ]
-                for file_path in potential_files:
-                    if file_exists(file_path, base):
-                        seed_specs.append((file_path, None))
-                        print(f"🎯 Found existing file: {file_path}")
-                        break
-                if seed_specs:
-                    break
+        # Create a simple prompt to ask what files are needed
+        simple_prompt = f"""You are analyzing an issue. Based on the title and description, what specific files do you need to see to understand and fix this issue?
+
+Title: {title}
+Description: {body}
+
+Please respond with a JSON list of file paths you need, like:
+{{"files_needed": ["path/to/file1.py", "path/to/file2.py"]}}
+
+Only request files that are directly relevant to understanding and fixing the issue."""
+
+        # Get the AI's response about what files it needs
+        try:
+            response = agent.client.chat.completions.create(
+                model=agent.model,
+                temperature=0,
+                messages=[
+                    {"role": "user", "content": simple_prompt},
+                ],
+            )
+            ai_response = response.choices[0].message.content or ""
+            print(f"🧠 AI response: {ai_response}")
+            
+            # Parse the AI's file requests
+            try:
+                ai_data = json.loads(ai_response)
+                requested_files = ai_data.get("files_needed", [])
+            except:
+                # Fallback: try to extract file paths from the response
+                file_pattern = r'["\']([^"\']*\.py)["\']'
+                requested_files = re.findall(file_pattern, ai_response)
+            
+            print(f"📁 AI requested files: {requested_files}")
+            
+        except Exception as e:
+            print(f"❌ Error asking AI for files: {e}")
+            requested_files = []
     
+    # 2) Check if requested files are in scope
+    in_scope_files = []
+    out_of_scope_files = []
+    
+    for file_path in requested_files:
+        # Normalize the path
+        normalized_path = _to_repo_relative(file_path)
+        
+        if _path_allowed(normalized_path):
+            in_scope_files.append(normalized_path)
+            print(f"✅ File in scope: {normalized_path}")
+        else:
+            out_of_scope_files.append(normalized_path)
+            print(f"❌ File out of scope: {normalized_path}")
+    
+    # 3) If any files are out of scope, return error
+    if out_of_scope_files:
+        comment = f"""🤖 **TicketWatcher Analysis**
+
+**Files Out of Scope**
+
+The following files are not in the allowed paths:
+{', '.join(out_of_scope_files)}
+
+**Allowed paths:** {', '.join(ALLOWED_PATHS)}
+
+**To fix this issue, please:**
+1. Move the files to an allowed directory, or
+2. Update the ALLOWED_PATHS configuration, or  
+3. Create the issue in a repository where these files are allowed
+
+I can only work with files in the allowed directories for security reasons."""
+        
+        add_issue_comment(number, comment)
+        return None
+    
+    # 4) If no files requested or all out of scope, ask for more context
+    if not in_scope_files:
+        comment = f"""🤖 **TicketWatcher Analysis**
+
+**No Files Identified**
+
+I couldn't identify any specific files needed to fix this issue.
+
+**To help me fix this issue, please provide:**
+
+1. **A specific file path:**
+   ```
+   Target: calculator/calculator.py
+   ```
+
+2. **A traceback with file paths:**
+   ```
+   File "calculator/calculator.py", line 10, in subtract
+       return a - b
+   TypeError: unsupported operand type(s)
+   ```
+
+3. **Or mention the specific file:**
+   - Just say "calculator.py" and I'll find it!
+
+**Allowed paths:** {', '.join(ALLOWED_PATHS)}
+
+I'm ready to help once I have the right context! 🚀"""
+        
+        add_issue_comment(number, comment)
+        return None
+    
+    # 5) Fetch the in-scope files
     seed_snips: List[Dict[str, Any]] = []
-    for path, line in seed_specs:
-        snip = _fetch_slice(path, base, line, AROUND_LINES)
+    for file_path in in_scope_files:
+        snip = _fetch_slice(file_path, base, None, AROUND_LINES)
         if snip:
             seed_snips.append(snip)
+            print(f"✅ Fetched file: {file_path}")
+        else:
+            print(f"❌ Could not fetch file: {file_path}")
     
-    # 2) Call agent (two-round loop)
-    agent = TicketWatcherAgent(
-        allowed_paths=ALLOWED_PATHS,
-        max_files=MAX_FILES,
-        max_total_lines=MAX_LINES,
-        default_around_lines=AROUND_LINES,
-    )
+    if not seed_snips:
+        comment = f"""🤖 **TicketWatcher Analysis**
 
+**Files Not Found**
+
+I identified the files you need, but they don't exist in the repository:
+{', '.join(in_scope_files)}
+
+**Please check:**
+1. The file paths are correct
+2. The files exist on the {base} branch
+3. The files are in the allowed directories
+
+**Allowed paths:** {', '.join(ALLOWED_PATHS)}"""
+        
+        add_issue_comment(number, comment)
+        return None
+    
+    # 6) Call agent with the fetched files
+    print(f"🤖 Calling agent with {len(seed_snips)} files...")
+    
     def _fetch_callback(needs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
         for n in needs:
@@ -502,20 +671,44 @@ Would you like me to help you with any of these options? 🚀"""
             line = n.get("line")
             symbol = n.get("symbol")
             around = int(n.get("around_lines") or AROUND_LINES)
+            
+            # Check if the requested file is in scope
+            normalized_path = _to_repo_relative(path)
+            if not _path_allowed(normalized_path):
+                print(f"❌ Requested file out of scope: {normalized_path}")
+                continue
+                
             if symbol:
-                sn = _fetch_symbol_slice(path, base, symbol, around)
+                sn = _fetch_symbol_slice(normalized_path, base, symbol, around)
             else:
-                sn = _fetch_slice(path, base, line, around)
+                sn = _fetch_slice(normalized_path, base, line, around)
             if sn:
                 results.append(sn)
+                print(f"✅ Fetched additional file: {normalized_path}")
         return results
 
     result = agent.run_two_rounds(title, body, seed_snips, fetch_callback=_fetch_callback)
 
-    # 3) If the agent asked for more (again), give guidance and stop
+    # 7) Handle agent response
     if result.get("action") == "request_context":
         thinking = result.get("thinking", "No thinking process provided")
         reason = result.get("reason", "Need more context")
+        needs = result.get("needs", [])
+        
+        # Show the thinking process
+        print(f"🧠 AI Thinking: {thinking}")
+        print(f"📝 Reason: {reason}")
+        print(f"📁 Additional files needed: {needs}")
+        
+        # Create a JSON response for more context
+        needs_json = []
+        for need in needs:
+            needs_json.append({
+                "path": need.get("path", ""),
+                "symbol": need.get("symbol"),
+                "line": need.get("line"),
+                "around_lines": need.get("around_lines", AROUND_LINES)
+            })
         
         comment = f"""🤖 **TicketWatcher Analysis**
 
@@ -524,22 +717,30 @@ Would you like me to help you with any of these options? 🚀"""
 
 **Issue:** {reason}
 
+**Files Currently Available:**
+{', '.join([snip.get('path', '') for snip in seed_snips])}
+
+**Additional Files Requested:**
+```json
+{json.dumps(needs_json, indent=2)}
+```
+
 **To help me fix this issue, please provide:**
 
-1. **A traceback with file paths:**
+1. **A specific file path:**
    ```
-   File "src/app/auth.py", line 10, in get_user_profile
-       name = user["name"]
-   KeyError: 'name'
+   Target: calculator/calculator.py
    ```
 
-2. **Or a target hint:**
+2. **A traceback with file paths:**
    ```
-   Target: src/app/auth.py
+   File "calculator/calculator.py", line 10, in subtract
+       return a - b
+   TypeError: unsupported operand type(s)
    ```
 
 3. **Or mention the specific file:**
-   - Just say "auth.py" or "user.py" and I'll find it!
+   - Just say "calculator.py" and I'll find it!
 
 **Allowed paths:** {', '.join(ALLOWED_PATHS)}
 **Files must exist on branch:** {base}
@@ -581,6 +782,12 @@ I'm ready to help once I have the right context! 🚀"""
     thinking = result.get("thinking", "No thinking process provided")
     notes = result.get("notes", "")
     
+    # Show the thinking process
+    print(f"🧠 AI Thinking: {thinking}")
+    print(f"📝 Notes: {notes}")
+    print(f"📁 Files touched: {files_touched}")
+    print(f"📏 Lines changed: {changed_lines}")
+    
     pr_url, pr_number = create_pr(
         title=f"{PR_TITLE_PREF} #{number}",
         head=branch,
@@ -592,6 +799,9 @@ I'm ready to help once I have the right context! 🚀"""
 
 **Files:** {files_touched} • **Lines:** {changed_lines}
 **Notes:** {notes}
+
+**Files Currently Available:**
+{', '.join([snip.get('path', '') for snip in seed_snips])}
 
 This is a draft PR created by the TicketWatcher AI agent. Please review before merging.""",
         draft=True,
