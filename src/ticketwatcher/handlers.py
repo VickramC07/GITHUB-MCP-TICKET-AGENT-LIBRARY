@@ -63,6 +63,11 @@ def _to_repo_relative(path: str) -> str:
     if needle in p:
         p = p.split(needle, 1)[1]
 
+    # If it's already a simple relative path (no leading slash, no absolute path components),
+    # keep it as-is to avoid converting to absolute paths
+    if not p.startswith("/") and not p.startswith(REPO_ROOT) and not os.path.isabs(p):
+        return p.lstrip("./").lstrip("/")
+
     # If absolute and under the workspace, relativize
     try:
         rel = os.path.relpath(p, REPO_ROOT).replace("\\", "/")
@@ -334,6 +339,62 @@ def handle_issue_event(event: Dict[str, Any]) -> Optional[str]:
     title = issue.get("title", "")
     body  = issue.get("body", "") or ""
     base  = os.getenv("TICKETWATCHER_BASE_BRANCH") or get_default_branch()
+    
+    # Check for cross-repository references
+    cross_repo_patterns = [
+        r'Target:\s*([^/\s]+)/([^\s]+)',  # repo/path
+        r'Target:\s*([^/\s]+/[^/\s]+):([^\s]+)',  # owner/repo:path
+        r'https://github\.com/([^/\s]+/[^/\s]+)/blob/[^/]+/(.+)',  # GitHub URL
+    ]
+    
+    for pattern in cross_repo_patterns:
+        match = re.search(pattern, body)
+        if match:
+            if len(match.groups()) == 2:
+                repo_part = match.group(1)
+                path_part = match.group(2)
+                
+                # Determine target repository
+                if '/' in repo_part:
+                    target_repo = repo_part  # owner/repo
+                else:
+                    # Assume current owner, different repo name
+                    current_repo = os.getenv("GITHUB_REPOSITORY", "")
+                    if current_repo:
+                        owner = current_repo.split('/')[0]
+                        target_repo = f"{owner}/{repo_part}"
+                    else:
+                        target_repo = repo_part
+                
+                # Create helpful comment for cross-repo issue
+                comment = f"""🤖 **TicketWatcher Analysis**
+
+**Cross-Repository Issue Detected**
+
+I detected a reference to a different repository: `{target_repo}`
+
+**Current Limitation:** TicketWatcher can only fix issues within the same repository where it's installed.
+
+**Solutions:**
+1. **Move the issue** to the `{target_repo}` repository
+2. **Install TicketWatcher** in the `{target_repo}` repository  
+3. **Copy the relevant code** to this repository for analysis
+
+**Target file:** `{path_part}` in `{target_repo}`
+
+**To install TicketWatcher in the target repository:**
+```bash
+# In the {target_repo} repository:
+# 1. Copy the workflow file
+# 2. Copy the src/ticketwatcher/ directory
+# 3. Add requirements.txt
+# 4. Set up GitHub secrets (OPENAI_API_KEY)
+```
+
+Would you like me to help you with any of these options? 🚀"""
+                
+                add_issue_comment(number, comment)
+                return None
 
     # 1) Build seed snippets from traceback/target hints
     seed_specs = parse_stack_text(body, allowed_prefixes=ALLOWED_PATHS, limit=5)
