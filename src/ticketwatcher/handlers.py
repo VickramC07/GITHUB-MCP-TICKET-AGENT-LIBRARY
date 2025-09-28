@@ -21,7 +21,7 @@ from .agent_llm import TicketWatcherAgent  # the class we just finished
 TRIGGER_LABELS = set(os.getenv("TICKETWATCHER_TRIGGER_LABELS", "agent-fix,auto-pr").split(","))
 BRANCH_PREFIX  = os.getenv("TICKETWATCHER_BRANCH_PREFIX", "agent-fix/")
 PR_TITLE_PREF  = os.getenv("TICKETWATCHER_PR_TITLE_PREFIX", "agent: auto-fix for issue")
-ALLOWED_PATHS  = [p.strip() for p in os.getenv("ALLOWED_PATHS", "src/,app/").split(",") if p.strip()]
+ALLOWED_PATHS  = [p.strip() for p in os.getenv("ALLOWED_PATHS", "src/,app/,calculator/").split(",") if p.strip()]
 MAX_FILES      = int(os.getenv("MAX_FILES", "4"))
 MAX_LINES      = int(os.getenv("MAX_LINES", "200"))
 AROUND_LINES   = int(os.getenv("DEFAULT_AROUND_LINES", "60"))
@@ -58,17 +58,19 @@ def _to_repo_relative(path: str) -> str:
     p = (path or "").strip().replace("\\", "/")
     print(f"🔍 DEBUG: Converting path '{path}' to repo-relative")
 
-    # If it includes '<repo_name>/', trim up to that
-    needle = f"/{REPO_NAME}/"
-    if needle in p:
-        p = p.split(needle, 1)[1]
-        print(f"   Trimmed repo name: '{p}'")
+    # If it's already a simple relative path (no leading slash, no absolute path components),
+    # keep it as-is to avoid converting to absolute paths
+    if not p.startswith("/") and not p.startswith(REPO_ROOT) and not os.path.isabs(p):
+        result = p.lstrip("./").lstrip("/")
+        print(f"   Simple relative path: '{result}'")
+        return result
 
-    # Handle absolute paths from tracebacks
+    # Handle absolute paths by finding the repository directory
     if os.path.isabs(p):
         print(f"   Absolute path detected: '{p}'")
+        
         # Try to find the repo root in the path
-        if REPO_ROOT in p:
+        if REPO_ROOT and REPO_ROOT in p:
             # Extract the part after the repo root
             try:
                 rel = os.path.relpath(p, REPO_ROOT).replace("\\", "/")
@@ -97,13 +99,6 @@ def _to_repo_relative(path: str) -> str:
                 result = f"src/{parts[1]}"
                 print(f"   Extracted src path: '{result}'")
                 return result
-
-    # If it's already a simple relative path (no leading slash, no absolute path components),
-    # keep it as-is to avoid converting to absolute paths
-    if not p.startswith("/") and not p.startswith(REPO_ROOT) and not os.path.isabs(p):
-        result = p.lstrip("./").lstrip("/")
-        print(f"   Simple relative path: '{result}'")
-        return result
 
     # If absolute and under the workspace, relativize
     try:
@@ -305,46 +300,33 @@ def _apply_hunks_to_text(orig_text: str, hunks: List[Dict[str, Any]]) -> str:
     src = orig_text.splitlines()
     dst = []
     cursor = 1  # 1-based
-    
     for h in hunks:
         old_start = h["old_start"]
-        old_len = h["old_len"]
-        
         # copy unchanged lines up to the hunk
         while cursor < old_start:
             dst.append(src[cursor - 1])
             cursor += 1
-        
-        # Process the hunk lines
-        hunk_lines = h["lines"]
-        src_cursor = cursor
-        
-        for ln in hunk_lines:
+        # consume old_len lines from src while reading hunk ops
+        # build replacement block
+        for ln in h["lines"]:
             if ln.startswith(' '):
-                # context line: must match src, copy from both
-                if src_cursor <= len(src):
-                    dst.append(src[src_cursor - 1])
-                src_cursor += 1
+                # context line: must match src
+                dst.append(ln[1:])
+                cursor += 1
             elif ln.startswith('-'):
-                # deletion: skip in src, don't add to dst
-                src_cursor += 1
+                # deletion: skip in dst, advance src
+                cursor += 1
             elif ln.startswith('+'):
-                # addition: add to dst, don't advance src
+                # addition: add to dst, do not advance src
                 dst.append(ln[1:])
             else:
                 # unknown marker, treat as context
-                if src_cursor <= len(src):
-                    dst.append(src[src_cursor - 1])
-                src_cursor += 1
-        
-        # Update cursor to end of processed hunk
-        cursor = src_cursor
-    
+                dst.append(ln)
+                cursor += 1
     # copy the rest
     while cursor <= len(src):
         dst.append(src[cursor - 1])
         cursor += 1
-    
     return "\n".join(dst)
 
 
@@ -478,8 +460,8 @@ Would you like me to help you with any of these options? 🚀"""
                     add_issue_comment(number, comment)
                     return None
     
-    # Handle cases like "Target: RepoName/file.py" 
-    # where RepoName might be the current repo name
+    # Handle cases like "Target: TestIssueRepo/calculator/calculator.py" 
+    # where TestIssueRepo might be the current repo name
     repo_name_pattern = r'Target:\s*([^/\s]+)/([^\s]+)'
     repo_match = re.search(repo_name_pattern, body)
     if repo_match:
@@ -536,10 +518,8 @@ Would you like me to help you with any of these options? 🚀"""
     # First, try to detect files from the issue content
     detected_files = []
     
-    # Check for explicit file references and traceback paths
+    # Check for explicit file references
     explicit_files = []
-    
-    # 1. Check for explicit Target: lines
     for line in body.split('\n'):
         if 'Target:' in line:
             target_match = re.search(r'Target:\s*(.+)', line)
@@ -547,24 +527,6 @@ Would you like me to help you with any of these options? 🚀"""
                 file_path = target_match.group(1).strip().strip('"\'')
                 explicit_files.append(file_path)
                 print(f"🎯 Found explicit target: {file_path}")
-    
-    # 2. Check for Python traceback file paths
-    traceback_patterns = [
-        r'File\s+"([^"]+)"\s*,\s*line\s+\d+',  # File "path", line N
-        r'File\s+([^\s,]+)\s*,\s*line\s+\d+',   # File path, line N
-    ]
-    
-    for pattern in traceback_patterns:
-        matches = re.findall(pattern, body)
-        for match in matches:
-            # Convert absolute paths to relative paths
-            file_path = _to_repo_relative(match)
-            if file_path and _path_allowed(file_path):
-                if file_path not in explicit_files:  # Avoid duplicates
-                    explicit_files.append(file_path)
-                    print(f"🎯 Found traceback file: {file_path}")
-    
-    print(f"📁 Total explicit files found: {explicit_files}")
     
     # Add explicit files first
     detected_files.extend(explicit_files)
@@ -588,44 +550,6 @@ Would you like me to help you with any of these options? 🚀"""
                     detected_files.append(file_path)
                     print(f"🎯 Added potential file: {file_path}")
                     break  # Only add one file per directory to avoid too many files
-    else:
-        # If we found explicit files but they don't exist, try to find similar files
-        print(f"🔍 Explicit files found but checking if they exist...")
-        existing_files = []
-        for file_path in explicit_files:
-            if file_exists(file_path, base):
-                existing_files.append(file_path)
-                print(f"✅ File exists: {file_path}")
-            else:
-                print(f"❌ File does not exist: {file_path}")
-                # Try to find similar files by looking for common Python file patterns
-                # Extract the directory and filename from the missing file
-                missing_dir = os.path.dirname(file_path)
-                missing_filename = os.path.basename(file_path)
-                
-                # Look for files with similar names in allowed directories
-                for allowed_dir in ALLOWED_PATHS:
-                    if allowed_dir.startswith(missing_dir) or missing_dir.startswith(allowed_dir.rstrip('/')):
-                        # Look for common Python file patterns
-                        potential_files = [
-                            f"{allowed_dir}{missing_filename}",
-                            f"{allowed_dir}main.py",
-                            f"{allowed_dir}app.py",
-                            f"{allowed_dir}index.py"
-                        ]
-                        for potential_file in potential_files:
-                            if _path_allowed(potential_file) and file_exists(potential_file, base):
-                                existing_files.append(potential_file)
-                                print(f"🎯 Found similar file: {potential_file}")
-                                break
-                        if existing_files:
-                            break
-        
-        if existing_files:
-            detected_files = existing_files
-            print(f"✅ Using existing files: {detected_files}")
-        else:
-            print(f"❌ No existing files found, will ask for more context")
     
     # If we found files, use them directly
     if detected_files:
@@ -721,18 +645,18 @@ I couldn't identify any specific files needed to fix this issue.
 
 1. **A specific file path:**
    ```
-   Target: src/main.py
+   Target: calculator/calculator.py
    ```
 
 2. **A traceback with file paths:**
    ```
-   File "src/main.py", line 10, in my_function
-       return some_value
+   File "calculator/calculator.py", line 10, in subtract
+       return a - b
    TypeError: unsupported operand type(s)
    ```
 
 3. **Or mention the specific file:**
-   - Just say "main.py" and I'll find it!
+   - Just say "calculator.py" and I'll find it!
 
 **Allowed paths:** {', '.join(ALLOWED_PATHS)}
 
@@ -837,18 +761,18 @@ I identified the files you need, but they don't exist in the repository:
 
 1. **A specific file path:**
    ```
-   Target: src/main.py
+   Target: calculator/calculator.py
    ```
 
 2. **A traceback with file paths:**
    ```
-   File "src/main.py", line 10, in my_function
-       return some_value
+   File "calculator/calculator.py", line 10, in subtract
+       return a - b
    TypeError: unsupported operand type(s)
    ```
 
 3. **Or mention the specific file:**
-   - Just say "main.py" and I'll find it!
+   - Just say "calculator.py" and I'll find it!
 
 **Allowed paths:** {', '.join(ALLOWED_PATHS)}
 **Files must exist on branch:** {base}
