@@ -64,6 +64,37 @@ def _to_repo_relative(path: str) -> str:
         p = p.split(needle, 1)[1]
         print(f"   Trimmed repo name: '{p}'")
 
+    # Handle absolute paths from tracebacks
+    if os.path.isabs(p):
+        print(f"   Absolute path detected: '{p}'")
+        # Try to find the repo root in the path
+        if REPO_ROOT in p:
+            # Extract the part after the repo root
+            try:
+                rel = os.path.relpath(p, REPO_ROOT).replace("\\", "/")
+                result = rel.lstrip("./").lstrip("/")
+                print(f"   Extracted from repo root: '{result}'")
+                return result
+            except Exception as e:
+                print(f"   Error extracting from repo root: {e}")
+        
+        # Try to find common patterns in absolute paths
+        if "/calculator/" in p:
+            # Extract calculator/... part
+            parts = p.split("/calculator/")
+            if len(parts) > 1:
+                result = f"calculator/{parts[1]}"
+                print(f"   Extracted calculator path: '{result}'")
+                return result
+        
+        # Try to find src/... part
+        if "/src/" in p:
+            parts = p.split("/src/")
+            if len(parts) > 1:
+                result = f"src/{parts[1]}"
+                print(f"   Extracted src path: '{result}'")
+                return result
+
     # If it's already a simple relative path (no leading slash, no absolute path components),
     # keep it as-is to avoid converting to absolute paths
     if not p.startswith("/") and not p.startswith(REPO_ROOT) and not os.path.isabs(p):
@@ -489,8 +520,10 @@ Would you like me to help you with any of these options? 🚀"""
     # First, try to detect files from the issue content
     detected_files = []
     
-    # Check for explicit file references
+    # Check for explicit file references and traceback paths
     explicit_files = []
+    
+    # 1. Check for explicit Target: lines
     for line in body.split('\n'):
         if 'Target:' in line:
             target_match = re.search(r'Target:\s*(.+)', line)
@@ -498,6 +531,24 @@ Would you like me to help you with any of these options? 🚀"""
                 file_path = target_match.group(1).strip().strip('"\'')
                 explicit_files.append(file_path)
                 print(f"🎯 Found explicit target: {file_path}")
+    
+    # 2. Check for Python traceback file paths
+    traceback_patterns = [
+        r'File\s+"([^"]+)"\s*,\s*line\s+\d+',  # File "path", line N
+        r'File\s+([^\s,]+)\s*,\s*line\s+\d+',   # File path, line N
+    ]
+    
+    for pattern in traceback_patterns:
+        matches = re.findall(pattern, body)
+        for match in matches:
+            # Convert absolute paths to relative paths
+            file_path = _to_repo_relative(match)
+            if file_path and _path_allowed(file_path):
+                if file_path not in explicit_files:  # Avoid duplicates
+                    explicit_files.append(file_path)
+                    print(f"🎯 Found traceback file: {file_path}")
+    
+    print(f"📁 Total explicit files found: {explicit_files}")
     
     # Add explicit files first
     detected_files.extend(explicit_files)
@@ -521,6 +572,39 @@ Would you like me to help you with any of these options? 🚀"""
                     detected_files.append(file_path)
                     print(f"🎯 Added potential file: {file_path}")
                     break  # Only add one file per directory to avoid too many files
+    else:
+        # If we found explicit files but they don't exist, try to find similar files
+        print(f"🔍 Explicit files found but checking if they exist...")
+        existing_files = []
+        for file_path in explicit_files:
+            if file_exists(file_path, base):
+                existing_files.append(file_path)
+                print(f"✅ File exists: {file_path}")
+            else:
+                print(f"❌ File does not exist: {file_path}")
+                # Try to find similar files
+                if "calculator" in file_path:
+                    # Look for calculator files
+                    for allowed_dir in ALLOWED_PATHS:
+                        if allowed_dir.startswith("calculator") or "calculator" in allowed_dir:
+                            potential_files = [
+                                f"{allowed_dir}calculator.py",
+                                f"{allowed_dir}main.py",
+                                f"{allowed_dir}operations.py"
+                            ]
+                            for potential_file in potential_files:
+                                if _path_allowed(potential_file) and file_exists(potential_file, base):
+                                    existing_files.append(potential_file)
+                                    print(f"🎯 Found similar file: {potential_file}")
+                                    break
+                            if existing_files:
+                                break
+        
+        if existing_files:
+            detected_files = existing_files
+            print(f"✅ Using existing files: {detected_files}")
+        else:
+            print(f"❌ No existing files found, will ask for more context")
     
     # If we found files, use them directly
     if detected_files:
