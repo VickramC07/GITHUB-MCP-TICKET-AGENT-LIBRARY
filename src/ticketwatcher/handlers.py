@@ -478,6 +478,14 @@ Would you like me to help you with any of these options? 🚀"""
     # 1) Enhanced file detection - try multiple approaches
     print(f"🤖 Enhanced file detection starting...")
     
+    # Create agent instance first
+    agent = TicketWatcherAgent(
+        allowed_paths=ALLOWED_PATHS,
+        max_files=MAX_FILES,
+        max_total_lines=MAX_LINES,
+        default_around_lines=AROUND_LINES,
+    )
+    
     # First, try to detect files from the issue content
     detected_files = []
     
@@ -491,27 +499,28 @@ Would you like me to help you with any of these options? 🚀"""
                 explicit_files.append(file_path)
                 print(f"🎯 Found explicit target: {file_path}")
     
-    # Check for any Python files in allowed directories
-    print(f"🔍 Searching for Python files in allowed directories...")
-    for allowed_dir in ALLOWED_PATHS:
-        # Look for common Python file patterns in each allowed directory
-        potential_files = [
-            f"{allowed_dir}main.py",
-            f"{allowed_dir}app.py", 
-            f"{allowed_dir}index.py",
-            f"{allowed_dir}src/main.py",
-            f"{allowed_dir}src/app.py",
-            f"{allowed_dir}lib/main.py",
-            f"{allowed_dir}lib/app.py"
-        ]
-        for file_path in potential_files:
-            if _path_allowed(file_path):
-                detected_files.append(file_path)
-                print(f"🎯 Added potential file: {file_path}")
-                break  # Only add one file per directory to avoid too many files
-    
-    # Add explicit files
+    # Add explicit files first
     detected_files.extend(explicit_files)
+    
+    # Only search for general files if no explicit targets were found
+    if not explicit_files:
+        print(f"🔍 No explicit targets found, searching for Python files in allowed directories...")
+        for allowed_dir in ALLOWED_PATHS:
+            # Look for common Python file patterns in each allowed directory
+            potential_files = [
+                f"{allowed_dir}main.py",
+                f"{allowed_dir}app.py", 
+                f"{allowed_dir}index.py",
+                f"{allowed_dir}src/main.py",
+                f"{allowed_dir}src/app.py",
+                f"{allowed_dir}lib/main.py",
+                f"{allowed_dir}lib/app.py"
+            ]
+            for file_path in potential_files:
+                if _path_allowed(file_path):
+                    detected_files.append(file_path)
+                    print(f"🎯 Added potential file: {file_path}")
+                    break  # Only add one file per directory to avoid too many files
     
     # If we found files, use them directly
     if detected_files:
@@ -520,12 +529,6 @@ Would you like me to help you with any of these options? 🚀"""
     else:
         # Fallback: Ask the AI what files it needs
         print(f"🤖 No files detected, asking AI what files it needs...")
-        agent = TicketWatcherAgent(
-            allowed_paths=ALLOWED_PATHS,
-            max_files=MAX_FILES,
-            max_total_lines=MAX_LINES,
-            default_around_lines=AROUND_LINES,
-        )
         
         # Create a simple prompt to ask what files are needed
         simple_prompt = f"""You are analyzing an issue. Based on the title and description, what specific files do you need to see to understand and fix this issue?
