@@ -59,7 +59,11 @@ graph TD
 ## 🚀 Quick Start
 
 ### 1. Install the library
-however u install the library
+**Paste:**
+
+curl -sSL https://raw.githubusercontent.com/VickramC07/GITHUB-MCP-TICKET-AGENT-LIBRARY/main/install_ticketwatcher_fixed.sh | bash
+
+**Into your terminal**
 
 ### 2. Add GitHub Secrets
 In your fork's repository settings, go to **Settings > Secrets and variables > Actions** and add these secrets:
@@ -192,9 +196,41 @@ pr_url, pr_number = create_pr(
 ```
 </details>
 
+## ☁️ Cloudflare Wrangler & GitHub Webhooks Integration
 
+TicketWatcher can also be deployed as a Cloudflare Worker using [Wrangler](https://developers.cloudflare.com/workers/wrangler/) to process GitHub webhooks in real-time, enabling ultra-fast automation without server hosting.
+
+### How It Works
+
+- The Worker listens for GitHub webhook events (such as issues or comments).
+- On receiving a relevant event (e.g., issue labeled with `agent-fix`), it runs the TicketWatcher agent logic and interacts with the GitHub API to propose fixes.
+- Responses are returned instantly and PRs/comments are created automatically.
+
+### How to Deploy
+
+1. **Install Wrangler**:
+   ```
+   npm install -g wrangler
+   ```
+
+2. **Clone the project**:
+   ```
+   git clone https://github.com/yourname/ticketwatcher-worker.git
+   cd ticketwatcher-worker
+   ```
+
+4. **Configure secrets**:
+   ```
+   npx wrangler secret put GITHUB_TOKEN
+   npx wrangler secret put GITHUB_WEBHOOK_SECRET
+   ```
+   
+5. **Deploy**:
+   ```
+   npx wrangler deploy
+   ```
+
+Now your agent can respond to GitHub events in real-time with serverless scalability!
 **Ready to automate your bug fixing workflow?** 🚀
 
 Start by setting up the GitHub Action and creating your first issue with the `agent-fix` label. The agent will analyze your bug report and create a draft PR with a proposed fix - all automatically!
-
-> 💡 **Pro Tip**: Start with small, well-defined bugs to see how the agent works, then gradually expand to more complex issues as you gain confidence in the system.
