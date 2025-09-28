@@ -61,7 +61,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_WORKSPACE: ${{ github.workspace }}
           TICKETWATCHER_MODEL: ${{ secrets.TICKETWATCHER_MODEL || 'gpt-4o-mini' }}
-          ALLOWED_PATHS: ${{ secrets.ALLOWED_PATHS || 'src/,app/,calculator/' }}
+          ALLOWED_PATHS: ${{ secrets.ALLOWED_PATHS || 'src/,app/' }}
           MAX_FILES: ${{ secrets.MAX_FILES || '4' }}
           MAX_LINES: ${{ secrets.MAX_LINES || '200' }}
           TICKETWATCHER_TRIGGER_LABELS: ${{ secrets.TICKETWATCHER_TRIGGER_LABELS || 'agent-fix,auto-pr' }}
@@ -103,7 +103,7 @@ Automated GitHub issue fixer using AI - with all the latest fixes!
 
 ## What's Fixed ✅
 
-- **Path Parsing**: Fixed issue with relative paths like `calculator/calculator.py`
+- **Path Parsing**: Fixed issue with relative paths like `src/main.py`
 - **Cross-Repo Detection**: Smart detection that doesn't trigger on same-repo paths
 - **File Access**: Proper file existence checking and content fetching
 - **Target Processing**: Handles `Target: RepoName/file.py` correctly
@@ -126,7 +126,7 @@ Your TicketWatcher is now installed with all the latest fixes. Next steps:
 
 3. **Test it:**
    - Create an issue with label `agent-fix`
-   - Include a target like: `Target: calculator/calculator.py`
+   - Include a target like: `Target: src/main.py`
    - Or include a traceback in the issue body
    - Watch the magic happen! ✨
 
@@ -134,10 +134,10 @@ Your TicketWatcher is now installed with all the latest fixes. Next steps:
 
 The agent now properly handles:
 
-- `Target: calculator/calculator.py` ✅
-- `Target: TestIssueRepo/calculator/calculator.py` ✅ (same repo)
-- `Target: src/app/auth.py` ✅
-- `Target: ./calculator/calculator.py` ✅
+- `Target: src/main.py` ✅
+- `Target: TestIssueRepo/src/main.py` ✅ (same repo)
+- `Target: app/auth.py` ✅
+- `Target: ./lib/utils.py` ✅
 
 ## Optional Configuration
 
@@ -148,7 +148,7 @@ You can customize the behavior by adding these secrets to your repository:
 
 **Optional (with defaults):**
 - `TICKETWATCHER_TRIGGER_LABELS` - Labels that trigger the agent (default: agent-fix,auto-pr)
-- `ALLOWED_PATHS` - Paths the agent can modify (default: src/,app/,calculator/)
+- `ALLOWED_PATHS` - Paths the agent can modify (default: src/,app/)
 - `MAX_FILES` - Max files to modify per fix (default: 4)
 - `MAX_LINES` - Max lines to change per fix (default: 200)
 - `DEFAULT_AROUND_LINES` - Lines of context around errors (default: 60)
@@ -203,7 +203,7 @@ echo "   git push"
 echo ""
 echo "2. Enable GitHub Actions in your repository settings"
 echo "3. Add OPENAI_API_KEY to your repository secrets"
-echo "4. Create a test issue with label 'agent-fix' and target 'Target: calculator/calculator.py'"
+echo "4. Create a test issue with label 'agent-fix' and target 'Target: src/main.py'"
 EOF
 
 chmod +x test-ticketer.sh
@@ -215,10 +215,14 @@ echo "   - ticketer/ directory with source code (with all fixes)"
 echo "   - .github/workflows/ticket-agent.yml"
 echo ""
 echo "🔧 What's Fixed:"
-echo "   - Path parsing for relative paths like calculator/calculator.py"
+echo "   - Path parsing for relative paths like any/file.py"
 echo "   - Smart cross-repo detection (won't trigger on same repo)"
 echo "   - Proper file access and content fetching"
 echo "   - Support for Target: RepoName/file.py format"
+echo "   - Enhanced general file detection"
+echo "   - Automatic file discovery for any Python files"
+echo "   - Comprehensive debug logging"
+echo "   - Parent directory path resolution"
 echo ""
 echo "Next steps:"
 echo "1. Commit and push the changes:"
@@ -236,7 +240,7 @@ echo "   - Add OPENAI_API_KEY secret"
 echo ""
 echo "4. Test it:"
 echo "   - Create an issue with label 'agent-fix'"
-echo "   - Use target: 'Target: calculator/calculator.py'"
+echo "   - Use target: 'Target: src/main.py'"
 echo "   - Or include a traceback in the issue body"
 echo ""
 echo "🎉 You're all set! The agent will now work correctly with your file paths."

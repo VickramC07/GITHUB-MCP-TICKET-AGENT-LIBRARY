@@ -21,7 +21,7 @@ from .agent_llm import TicketWatcherAgent  # the class we just finished
 TRIGGER_LABELS = set(os.getenv("TICKETWATCHER_TRIGGER_LABELS", "agent-fix,auto-pr").split(","))
 BRANCH_PREFIX  = os.getenv("TICKETWATCHER_BRANCH_PREFIX", "agent-fix/")
 PR_TITLE_PREF  = os.getenv("TICKETWATCHER_PR_TITLE_PREFIX", "agent: auto-fix for issue")
-ALLOWED_PATHS  = [p.strip() for p in os.getenv("ALLOWED_PATHS", "src/,app/,calculator/").split(",") if p.strip()]
+ALLOWED_PATHS  = [p.strip() for p in os.getenv("ALLOWED_PATHS", "src/,app/").split(",") if p.strip()]
 MAX_FILES      = int(os.getenv("MAX_FILES", "4"))
 MAX_LINES      = int(os.getenv("MAX_LINES", "200"))
 AROUND_LINES   = int(os.getenv("DEFAULT_AROUND_LINES", "60"))
@@ -79,13 +79,16 @@ def _to_repo_relative(path: str) -> str:
                 print(f"   Error extracting from repo root: {e}")
         
         # Try to find common patterns in absolute paths
-        if "/calculator/" in p:
-            # Extract calculator/... part
-            parts = p.split("/calculator/")
-            if len(parts) > 1:
-                result = f"calculator/{parts[1]}"
-                print(f"   Extracted calculator path: '{result}'")
-                return result
+        # Look for any directory that might be a project directory
+        path_parts = p.split("/")
+        for i, part in enumerate(path_parts):
+            if part and i < len(path_parts) - 1:  # Not the last part
+                # Check if this looks like a project directory
+                if part not in ["Users", "home", "tmp", "var", "opt", "usr", "bin", "sbin", "etc"]:
+                    # Extract everything from this directory onwards
+                    result = "/".join(path_parts[i:])
+                    print(f"   Extracted project path: '{result}'")
+                    return result
         
         # Try to find src/... part
         if "/src/" in p:
@@ -302,33 +305,46 @@ def _apply_hunks_to_text(orig_text: str, hunks: List[Dict[str, Any]]) -> str:
     src = orig_text.splitlines()
     dst = []
     cursor = 1  # 1-based
+    
     for h in hunks:
         old_start = h["old_start"]
+        old_len = h["old_len"]
+        
         # copy unchanged lines up to the hunk
         while cursor < old_start:
             dst.append(src[cursor - 1])
             cursor += 1
-        # consume old_len lines from src while reading hunk ops
-        # build replacement block
-        for ln in h["lines"]:
+        
+        # Process the hunk lines
+        hunk_lines = h["lines"]
+        src_cursor = cursor
+        
+        for ln in hunk_lines:
             if ln.startswith(' '):
-                # context line: must match src
-                dst.append(ln[1:])
-                cursor += 1
+                # context line: must match src, copy from both
+                if src_cursor <= len(src):
+                    dst.append(src[src_cursor - 1])
+                src_cursor += 1
             elif ln.startswith('-'):
-                # deletion: skip in dst, advance src
-                cursor += 1
+                # deletion: skip in src, don't add to dst
+                src_cursor += 1
             elif ln.startswith('+'):
-                # addition: add to dst, do not advance src
+                # addition: add to dst, don't advance src
                 dst.append(ln[1:])
             else:
                 # unknown marker, treat as context
-                dst.append(ln)
-                cursor += 1
+                if src_cursor <= len(src):
+                    dst.append(src[src_cursor - 1])
+                src_cursor += 1
+        
+        # Update cursor to end of processed hunk
+        cursor = src_cursor
+    
     # copy the rest
     while cursor <= len(src):
         dst.append(src[cursor - 1])
         cursor += 1
+    
     return "\n".join(dst)
 
 
@@ -462,8 +478,8 @@ Would you like me to help you with any of these options? 🚀"""
                     add_issue_comment(number, comment)
                     return None
     
-    # Handle cases like "Target: TestIssueRepo/calculator/calculator.py" 
-    # where TestIssueRepo might be the current repo name
+    # Handle cases like "Target: RepoName/file.py" 
+    # where RepoName might be the current repo name
     repo_name_pattern = r'Target:\s*([^/\s]+)/([^\s]+)'
     repo_match = re.search(repo_name_pattern, body)
     if repo_match:
@@ -582,23 +598,28 @@ Would you like me to help you with any of these options? 🚀"""
                 print(f"✅ File exists: {file_path}")
             else:
                 print(f"❌ File does not exist: {file_path}")
-                # Try to find similar files
-                if "calculator" in file_path:
-                    # Look for calculator files
-                    for allowed_dir in ALLOWED_PATHS:
-                        if allowed_dir.startswith("calculator") or "calculator" in allowed_dir:
-                            potential_files = [
-                                f"{allowed_dir}calculator.py",
-                                f"{allowed_dir}main.py",
-                                f"{allowed_dir}operations.py"
-                            ]
-                            for potential_file in potential_files:
-                                if _path_allowed(potential_file) and file_exists(potential_file, base):
-                                    existing_files.append(potential_file)
-                                    print(f"🎯 Found similar file: {potential_file}")
-                                    break
-                            if existing_files:
+                # Try to find similar files by looking for common Python file patterns
+                # Extract the directory and filename from the missing file
+                missing_dir = os.path.dirname(file_path)
+                missing_filename = os.path.basename(file_path)
+                
+                # Look for files with similar names in allowed directories
+                for allowed_dir in ALLOWED_PATHS:
+                    if allowed_dir.startswith(missing_dir) or missing_dir.startswith(allowed_dir.rstrip('/')):
+                        # Look for common Python file patterns
+                        potential_files = [
+                            f"{allowed_dir}{missing_filename}",
+                            f"{allowed_dir}main.py",
+                            f"{allowed_dir}app.py",
+                            f"{allowed_dir}index.py"
+                        ]
+                        for potential_file in potential_files:
+                            if _path_allowed(potential_file) and file_exists(potential_file, base):
+                                existing_files.append(potential_file)
+                                print(f"🎯 Found similar file: {potential_file}")
                                 break
+                        if existing_files:
+                            break
         
         if existing_files:
             detected_files = existing_files
@@ -700,18 +721,18 @@ I couldn't identify any specific files needed to fix this issue.
 
 1. **A specific file path:**
    ```
-   Target: calculator/calculator.py
+   Target: src/main.py
    ```
 
 2. **A traceback with file paths:**
    ```
-   File "calculator/calculator.py", line 10, in subtract
-       return a - b
+   File "src/main.py", line 10, in my_function
+       return some_value
    TypeError: unsupported operand type(s)
    ```
 
 3. **Or mention the specific file:**
-   - Just say "calculator.py" and I'll find it!
+   - Just say "main.py" and I'll find it!
 
 **Allowed paths:** {', '.join(ALLOWED_PATHS)}
 
@@ -816,18 +837,18 @@ I identified the files you need, but they don't exist in the repository:
 
 1. **A specific file path:**
    ```
-   Target: calculator/calculator.py
+   Target: src/main.py
    ```
 
 2. **A traceback with file paths:**
    ```
-   File "calculator/calculator.py", line 10, in subtract
-       return a - b
+   File "src/main.py", line 10, in my_function
+       return some_value
    TypeError: unsupported operand type(s)
    ```
 
 3. **Or mention the specific file:**
-   - Just say "calculator.py" and I'll find it!
+   - Just say "main.py" and I'll find it!
 
 **Allowed paths:** {', '.join(ALLOWED_PATHS)}
 **Files must exist on branch:** {base}
