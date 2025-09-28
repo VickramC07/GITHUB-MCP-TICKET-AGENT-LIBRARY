@@ -1,0 +1,36 @@
+name: Ticket Agent
+on:
+  issues:
+    types: [opened, labeled, reopened]
+  issue_comment:
+    types: [created]
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      - name: Install dependencies
+        run: |
+          cd ticketer
+          pip install -r requirements.txt
+      - name: Run Ticket Agent
+        run: |
+          cd ticketer
+          python run_ticketwatcher.py
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+          TICKETWATCHER_MODEL: ${{ secrets.TICKETWATCHER_MODEL || 'gpt-4o-mini' }}
+          ALLOWED_PATHS: ${{ secrets.ALLOWED_PATHS || 'src/,app/,calculator/' }}
+          MAX_FILES: ${{ secrets.MAX_FILES || '4' }}
+          MAX_LINES: ${{ secrets.MAX_LINES || '200' }}
+          TICKETWATCHER_TRIGGER_LABELS: ${{ secrets.TICKETWATCHER_TRIGGER_LABELS || 'agent-fix,auto-pr' }}
+          DEFAULT_AROUND_LINES: ${{ secrets.DEFAULT_AROUND_LINES || '60' }}
+          TICKETWATCHER_BASE_BRANCH: ${{ secrets.TICKETWATCHER_BASE_BRANCH || 'main' }}
+          TICKETWATCHER_BRANCH_PREFIX: ${{ secrets.TICKETWATCHER_BRANCH_PREFIX || 'agent-fix/' }}
