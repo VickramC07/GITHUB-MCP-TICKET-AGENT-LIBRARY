@@ -340,12 +340,15 @@ def handle_issue_event(event: Dict[str, Any]) -> Optional[str]:
     body  = issue.get("body", "") or ""
     base  = os.getenv("TICKETWATCHER_BASE_BRANCH") or get_default_branch()
     
-    # Check for cross-repository references
+    # Check for cross-repository references (only for actual different repos)
     cross_repo_patterns = [
-        r'Target:\s*([^/\s]+)/([^\s]+)',  # repo/path
         r'Target:\s*([^/\s]+/[^/\s]+):([^\s]+)',  # owner/repo:path
         r'https://github\.com/([^/\s]+/[^/\s]+)/blob/[^/]+/(.+)',  # GitHub URL
     ]
+    
+    # Get current repository info
+    current_repo = os.getenv("GITHUB_REPOSITORY", "")
+    current_repo_name = current_repo.split("/", 1)[-1] if "/" in current_repo else current_repo
     
     for pattern in cross_repo_patterns:
         match = re.search(pattern, body)
@@ -354,37 +357,27 @@ def handle_issue_event(event: Dict[str, Any]) -> Optional[str]:
                 repo_part = match.group(1)
                 path_part = match.group(2)
                 
-                # Determine target repository
-                if '/' in repo_part:
-                    target_repo = repo_part  # owner/repo
-                else:
-                    # Assume current owner, different repo name
-                    current_repo = os.getenv("GITHUB_REPOSITORY", "")
-                    if current_repo:
-                        owner = current_repo.split('/')[0]
-                        target_repo = f"{owner}/{repo_part}"
-                    else:
-                        target_repo = repo_part
-                
-                # Create helpful comment for cross-repo issue
-                comment = f"""🤖 **TicketWatcher Analysis**
+                # Only treat as cross-repo if it's actually a different repository
+                if repo_part != current_repo and repo_part != current_repo_name:
+                    # Create helpful comment for cross-repo issue
+                    comment = f"""🤖 **TicketWatcher Analysis**
 
 **Cross-Repository Issue Detected**
 
-I detected a reference to a different repository: `{target_repo}`
+I detected a reference to a different repository: `{repo_part}`
 
 **Current Limitation:** TicketWatcher can only fix issues within the same repository where it's installed.
 
 **Solutions:**
-1. **Move the issue** to the `{target_repo}` repository
-2. **Install TicketWatcher** in the `{target_repo}` repository  
+1. **Move the issue** to the `{repo_part}` repository
+2. **Install TicketWatcher** in the `{repo_part}` repository  
 3. **Copy the relevant code** to this repository for analysis
 
-**Target file:** `{path_part}` in `{target_repo}`
+**Target file:** `{path_part}` in `{repo_part}`
 
 **To install TicketWatcher in the target repository:**
 ```bash
-# In the {target_repo} repository:
+# In the {repo_part} repository:
 # 1. Copy the workflow file
 # 2. Copy the src/ticketwatcher/ directory
 # 3. Add requirements.txt
@@ -392,9 +385,53 @@ I detected a reference to a different repository: `{target_repo}`
 ```
 
 Would you like me to help you with any of these options? 🚀"""
-                
-                add_issue_comment(number, comment)
-                return None
+                    
+                    add_issue_comment(number, comment)
+                    return None
+    
+    # Handle cases like "Target: TestIssueRepo/calculator/calculator.py" 
+    # where TestIssueRepo might be the current repo name
+    repo_name_pattern = r'Target:\s*([^/\s]+)/([^\s]+)'
+    repo_match = re.search(repo_name_pattern, body)
+    if repo_match:
+        repo_name = repo_match.group(1)
+        file_path = repo_match.group(2)
+        
+        # If the repo name matches the current repo name, treat it as a local path
+        if repo_name == current_repo_name:
+            # Replace the target with just the file path for normal processing
+            body = body.replace(f"Target: {repo_name}/{file_path}", f"Target: {file_path}")
+            print(f"🔄 Converted {repo_name}/{file_path} to {file_path} (same repository)")
+        elif repo_name != current_repo and repo_name != current_repo_name:
+            # It's actually a different repository
+            comment = f"""🤖 **TicketWatcher Analysis**
+
+**Cross-Repository Issue Detected**
+
+I detected a reference to a different repository: `{repo_name}`
+
+**Current Limitation:** TicketWatcher can only fix issues within the same repository where it's installed.
+
+**Solutions:**
+1. **Move the issue** to the `{repo_name}` repository
+2. **Install TicketWatcher** in the `{repo_name}` repository  
+3. **Copy the relevant code** to this repository for analysis
+
+**Target file:** `{file_path}` in `{repo_name}`
+
+**To install TicketWatcher in the target repository:**
+```bash
+# In the {repo_name} repository:
+# 1. Copy the workflow file
+# 2. Copy the src/ticketwatcher/ directory
+# 3. Add requirements.txt
+# 4. Set up GitHub secrets (OPENAI_API_KEY)
+```
+
+Would you like me to help you with any of these options? 🚀"""
+            
+            add_issue_comment(number, comment)
+            return None
 
     # 1) Build seed snippets from traceback/target hints
     seed_specs = parse_stack_text(body, allowed_prefixes=ALLOWED_PATHS, limit=5)
