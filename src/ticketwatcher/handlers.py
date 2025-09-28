@@ -22,7 +22,7 @@ from .agent_llm import TicketWatcherAgent  # the class we just finished
 TRIGGER_LABELS = set(os.getenv("TICKETWATCHER_TRIGGER_LABELS", "agent-fix,auto-pr").split(","))
 BRANCH_PREFIX  = os.getenv("TICKETWATCHER_BRANCH_PREFIX", "agent-fix/")
 PR_TITLE_PREF  = os.getenv("TICKETWATCHER_PR_TITLE_PREFIX", "agent: auto-fix for issue")
-ALLOWED_PATHS  = [p.strip() for p in os.getenv("ALLOWED_PATHS", "").split(",") if p.strip()]
+ALLOWED_PATHS  = [p.strip() for p in os.getenv("ALLOWED_PATHS", "src/,app/,calculator/").split(",") if p.strip()]
 MAX_FILES      = int(os.getenv("MAX_FILES", "4"))
 MAX_LINES      = int(os.getenv("MAX_LINES", "200"))
 AROUND_LINES   = int(os.getenv("DEFAULT_AROUND_LINES", "60"))
@@ -163,8 +163,17 @@ def parse_stack_text(
 
 def _fetch_slice(path: str, base: str, center_line: int | None, around: int) -> Dict[str, Any] | None:
     """Fetch ±around lines for a file (centered at center_line if given)."""
-    if not _path_allowed(path) or not file_exists(path, base):
+    print(f"🔍 Attempting to fetch slice for path: '{path}'")
+    print(f"   Path allowed: {_path_allowed(path)}")
+    print(f"   File exists: {file_exists(path, base)}")
+    
+    if not _path_allowed(path):
+        print(f"❌ Path '{path}' not allowed. Allowed paths: {ALLOWED_PATHS}")
         return None
+    if not file_exists(path, base):
+        print(f"❌ File '{path}' does not exist on branch '{base}'")
+        return None
+        
     content = get_file_text(path, base)
     lines = content.splitlines()
     n = len(lines)
@@ -176,6 +185,7 @@ def _fetch_slice(path: str, base: str, center_line: int | None, around: int) -> 
         start = max(1, center_line - around)
         end = min(n, center_line + around)
     code = "\n".join(lines[start - 1 : end])
+    print(f"✅ Successfully fetched {len(code)} characters from '{path}'")
     return {"path": path, "start_line": start, "end_line": end, "code": code}
 
 
@@ -435,6 +445,7 @@ Would you like me to help you with any of these options? 🚀"""
 
     # 1) Build seed snippets from traceback/target hints
     seed_specs = parse_stack_text(body, allowed_prefixes=ALLOWED_PATHS, limit=5)
+    print(f"🔍 Parsed seed specs: {seed_specs}")
     
     # If no paths detected, try enhanced context detection
     if not seed_specs:
@@ -448,6 +459,27 @@ Would you like me to help you with any of these options? 🚀"""
         detected_paths = agent.detect_context_from_issue(title, body)
         print(f"🧠 AI-detected paths: {detected_paths}")
         seed_specs = detected_paths[:5]
+        
+        # If still no paths found, try to find any Python files in allowed directories
+        if not seed_specs:
+            print(f"🔍 No AI-detected paths, trying to find Python files in allowed directories...")
+            for allowed_path in ALLOWED_PATHS:
+                # Try common Python file patterns
+                potential_files = [
+                    f"{allowed_path}calculator.py",
+                    f"{allowed_path}calculator/calculator.py", 
+                    f"{allowed_path}calculator/main.py",
+                    f"{allowed_path}calculator/operations.py",
+                    f"{allowed_path}main.py",
+                    f"{allowed_path}app.py"
+                ]
+                for file_path in potential_files:
+                    if file_exists(file_path, base):
+                        seed_specs.append((file_path, None))
+                        print(f"🎯 Found existing file: {file_path}")
+                        break
+                if seed_specs:
+                    break
     
     seed_snips: List[Dict[str, Any]] = []
     for path, line in seed_specs:

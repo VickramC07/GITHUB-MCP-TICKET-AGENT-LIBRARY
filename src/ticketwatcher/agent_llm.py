@@ -86,7 +86,9 @@ class TicketWatcherAgent:
             "- **Thinking Transparency**: Always explain your reasoning in the 'thinking' field\n"
             "- **Strategic Information**: Request the most valuable information first\n"
             "- **Constraint Awareness**: Respect max_files, max_lines, allowed_paths\n"
-            "- **Minimal Changes**: Prefer the smallest safe fix\n\n"
+            "- **Minimal Changes**: Prefer the smallest safe fix\n"
+            "- **File Analysis**: If you have access to the target file, analyze it first before asking for more context\n"
+            "- **Smart Requests**: Only request additional files if you need to understand imports, dependencies, or related functionality\n\n"
             "## CONTEXT DETECTION STRATEGIES\n"
             "- Look for function names: 'get_user_profile' → likely in auth/user files\n"
             "- Look for error patterns: 'KeyError: name' → likely dict access issues\n"
@@ -324,7 +326,7 @@ Remember: You're an intelligent agent - use your reasoning to detect context eve
             r'\b(\w+\.js)\b',
             r'\b(\w+\.ts)\b',
             # Function/class names that might indicate files
-            r'\b(get_user|auth|login|user|profile)\b',
+            r'\b(get_user|auth|login|user|profile|calculator|subtract|add|multiply|divide)\b',
             # Import statements
             r'from\s+([^\s]+)\s+import',
             r'import\s+([^\s]+)',
@@ -332,6 +334,7 @@ Remember: You're an intelligent agent - use your reasoning to detect context eve
         
         text = f"{title} {body}".lower()
         
+        # First, try to find explicit file references
         for pattern in patterns:
             matches = re.finditer(pattern, text, re.IGNORECASE)
             for match in matches:
@@ -349,6 +352,23 @@ Remember: You're an intelligent agent - use your reasoning to detect context eve
                 for full_path in full_paths:
                     if self._path_allowed(full_path):
                         detected_paths.append((full_path, line))
+        
+        # If no specific files found, try to find files in allowed directories
+        if not detected_paths:
+            print(f"🔍 No specific files detected, searching allowed directories: {self.allowed_paths}")
+            for allowed_dir in self.allowed_paths:
+                # Look for common file patterns in the text
+                if 'calculator' in text:
+                    potential_files = [
+                        f"{allowed_dir}calculator.py",
+                        f"{allowed_dir}calculator/calculator.py",
+                        f"{allowed_dir}calculator/main.py",
+                        f"{allowed_dir}calculator/operations.py"
+                    ]
+                    for file_path in potential_files:
+                        if self._path_allowed(file_path):
+                            detected_paths.append((file_path, None))
+                            print(f"🎯 Added potential file: {file_path}")
         
         return detected_paths[:5]  # Limit to 5 paths
 
